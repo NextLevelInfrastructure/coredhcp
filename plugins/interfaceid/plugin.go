@@ -228,6 +228,15 @@ func (lease Lease) String() string {
 // persistent addresses.
 
 func (state *PluginState) Handler6(req, resp dhcpv6.DHCPv6) (dhcpv6.DHCPv6, bool) {
+	respmsg, ok := resp.(*dhcpv6.Message)
+	if !ok {
+		log.Errorf("response message format bug: %v", respmsg)
+		return nil, true
+	}
+	if respmsg.Options.OneIANA() != nil || respmsg.Options.OneIAPD() != nil {
+		log.Infof("response already contains IA from previous plugin, passing")
+		return resp, false
+	}
 	if !req.IsRelay() {
 		log.Debug("not a relay message so no interface ID or link, passing")
 		return resp, false
