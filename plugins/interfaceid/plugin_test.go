@@ -24,10 +24,11 @@ func makeConfig(t *testing.T) (*os.File, func()) {
 
 	// fill temp file with valid lease lines and some comments
 	_, err = tmp.WriteString(`
-us-ca-sfba.prod.example.com:Eth12/1(Port12):
- - [00:11:22:33:44:55, 192.0.2.100]
- - [default, 192.0.2.101, fedb::2, fedb:ffff::/60]
- - [11:22:33:44:55:66, fedb::1]
+interfaceid:
+  us-ca-sfba.prod.example.com:Eth12/1(Port12):
+    - [00:11:22:33:44:55, 192.0.2.100]
+    - [default, 192.0.2.101, fedb::2, fedb:ffff::/60]
+    - [11:22:33:44:55:66, fedb::1]
 # this is a comment
 `)
 	require.NoError(t, err)
@@ -79,7 +80,7 @@ func TestLoadRecords(t *testing.T) {
 		tmp, cleanup := makeConfig(t)
 		defer cleanup()
 
-		_, err := tmp.WriteString("  - [01:02:03:44:55:66, 192.0.2.101, 192.1.1.1, fedb::2, fedb:ffff::/60]\n")
+		_, err := tmp.WriteString("    - [01:02:03:44:55:66, 192.0.2.101, 192.1.1.1, fedb::2, fedb:ffff::/60]\n")
 		require.NoError(t, err)
 		_, err = LoadLeases(tmp.Name())
 		assert.Error(t, err)
@@ -89,7 +90,7 @@ func TestLoadRecords(t *testing.T) {
 		tmp, cleanup := makeConfig(t)
 		defer cleanup()
 
-		_, err := tmp.WriteString("  - [badmac, 192.0.2.101, fedb::2, fedb:ffff::/60]\n")
+		_, err := tmp.WriteString("    - [badmac, 192.0.2.101, fedb::2, fedb:ffff::/60]\n")
 		require.NoError(t, err)
 		_, err = LoadLeases(tmp.Name())
 		assert.Error(t, err)
@@ -99,7 +100,7 @@ func TestLoadRecords(t *testing.T) {
 		tmp, cleanup := makeConfig(t)
 		defer cleanup()
 
-		_, err := tmp.WriteString("  - [01:02:03:44:55:66, 192.0.2.301, fedb::2, fedb:ffff::/60]\n")
+		_, err := tmp.WriteString("    - [01:02:03:44:55:66, 192.0.2.301, fedb::2, fedb:ffff::/60]\n")
 		require.NoError(t, err)
 		_, err = LoadLeases(tmp.Name())
 		assert.Error(t, err)
@@ -239,9 +240,9 @@ func TestHandler6(t *testing.T) {
 		// we add more leases to the file
 		// this should trigger an event to refresh the leases database
 		// without calling setupFile again
-		_, err = tmp.WriteString("Port666:\n")
+		_, err = tmp.WriteString("  Port666:\n")
 		require.NoError(t, err)
-		_, err = tmp.WriteString("  - [00:11:22:33:e4:f5, 192.0.2.100]\n")
+		_, err = tmp.WriteString("    - [00:11:22:33:e4:f5, 192.0.2.100]\n")
 		require.NoError(t, err)
 		// since the event is processed asynchronously, give it a little time
 		time.Sleep(time.Millisecond * 100)

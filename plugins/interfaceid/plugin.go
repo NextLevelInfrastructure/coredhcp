@@ -30,10 +30,13 @@
 // A lease file with errors will not be loaded.
 //
 //  $ cat interfaceid_leases.txt
-//  us-ca-sfba.prod.example.com:Eth12/1(Port12):
-//    - [00:11:22:33:44:55, 10.0.0.1]
-//    - [01:23:45:67:89:01, fedb::a]
-//    - [default, 10.1.2.3, fedb::1, fedb:ffff::/60]
+//  interfaceid:
+//    us-ca-sfba.prod.example.com:Eth12/1(Port12):
+//      - [00:11:22:33:44:55, 10.0.0.1]
+//      - [01:23:45:67:89:01, fedb::a]
+//      - [default, 10.1.2.3, fedb::1, fedb:ffff::/60]
+//    us-ca-sfba.prod.example.com:Eth13/1(Port13):
+//      - [...]
 //
 // The plugin is configured once in the server6 section and once in the
 // server4 section of coredhcp's config file. Pass the lease duration as
@@ -54,12 +57,11 @@
 // is run.
 //
 // If the optional "autorefresh" argument is given, the plugin will try to
-// refresh the lease mapping at runtime whenever the lease file is updated.
+// refresh the lease mappings at runtime whenever the lease file is updated.
 
 package interfaceid
 
 import (
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -106,11 +108,13 @@ func LoadLeases(filename string) (LeaseMap, error) {
 	if err != nil {
 		return nil, err
 	}
-	var leases LeaseMap
-	if err = yaml.Unmarshal(yamlfile, &leases); err != nil {
+	var enclosure struct {
+		Interfaceid LeaseMap
+	}
+	if err = yaml.Unmarshal(yamlfile, &enclosure); err != nil {
 		return nil, err
 	}
-	return leases, nil
+	return enclosure.Interfaceid, nil
 }
 
 // We pre-process the lease map to speed up certain operations and find errors.
@@ -212,8 +216,6 @@ func (lease Lease) String() string {
 	return fmt.Sprintf("Lease(host4=%s, host6=%s, prefix=%s, expires %s)", lease.host4.String(), lease.host6.String(), lease.prefix.String(), expires)
 }
 
-// Handler6 handles DHCPv6 packets for the interfaceid plugin.
-//
 // We ignore any request that is not a relay message, because only
 // relays can tell us an interface ID or link address, and those
 // are the whole point of this plugin.
@@ -374,8 +376,6 @@ func updateLeaseTime(lease *Lease, duration time.Duration, cid, vid string) {
 	lease.expires = now.Add(duration)
 }
 
-// Handler4 handles DHCPv4 packets for the interfaceid plugin.
-
 func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bool) {
 	rai := req.RelayAgentInfo()
 	if rai == nil || len(req.GatewayIPAddr) == 0 || req.GatewayIPAddr.IsUnspecified() {
@@ -432,7 +432,7 @@ func setup4(args ...string) (handler.Handler4, error) {
 
 func (state *PluginState) FromArgs(args ...string) error {
 	if len(args) < 2 {
-		return errors.New("need duration and filename arguments")
+		return fmt.Errorf("need duration and filename arguments")
 	}
 	if duration, err := strconv.Atoi(args[0]); err == nil {
 		if duration < 1 {
@@ -448,7 +448,7 @@ func (state *PluginState) FromArgs(args ...string) error {
 	}
 
 	// if the autorefresh argument is not present, just load the leases
-	if len(args) < 2 || args[2] != autoRefreshArg {
+	if len(args) < 3 || args[2] != autoRefreshArg {
 		leases, err := LoadLeases(state.Filename)
 		if err != nil {
 			return err
