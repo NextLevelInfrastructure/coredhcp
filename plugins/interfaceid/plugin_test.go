@@ -7,6 +7,7 @@ package interfaceid
 import (
 	"io/ioutil"
 	"net"
+	"net/netip"
 	"os"
 	"testing"
 	"time"
@@ -66,7 +67,7 @@ func TestLoadRecords(t *testing.T) {
 
 		state := newStateFromFile(t, tmp.Name())
 		if assert.Equal(t, 2, len(state.LeaseByMac)) {
-			assert.Equal(t, net.ParseIP("fedb::1"), state.LeaseByMac["11:22:33:44:55:66"][0].host6)
+			assert.Equal(t, netip.MustParseAddr("fedb::1"), state.LeaseByMac["11:22:33:44:55:66"][0].host6)
 		}
 		if assert.Equal(t, 1, len(state.LeaseByInterface)) {
 			leases := state.LeaseByInterface[key]
@@ -106,7 +107,7 @@ func TestLoadRecords(t *testing.T) {
 }
 
 func TestHandler4(t *testing.T) {
-	t.Run("unknown MAC", func(t *testing.T) {
+	t.Run("unknown MAC, then known MAC", func(t *testing.T) {
 		tmp, cleanup := makeConfig(t)
 		defer cleanup()
 		state := newStateFromFile(t, tmp.Name())
@@ -143,7 +144,7 @@ func TestHandler4(t *testing.T) {
 }
 
 func TestHandler6(t *testing.T) {
-	t.Run("unknown MAC", func(t *testing.T) {
+	t.Run("unknown MAC, then known MAC", func(t *testing.T) {
 		tmp, cleanup := makeConfig(t)
 		defer cleanup()
 		state := newStateFromFile(t, tmp.Name())
@@ -151,7 +152,15 @@ func TestHandler6(t *testing.T) {
 		// prepare DHCPv6 request
 		mac := "11:22:33:44:55:66"
 		claddr, _ := net.ParseMAC(mac)
-		req, err := dhcpv6.NewSolicit(claddr)
+		pref := dhcpv6.OptIAPrefix{
+			PreferredLifetime: 0xaabbccdd * time.Second,
+			ValidLifetime:     0xeeff0011 * time.Second,
+			Prefix: &net.IPNet{
+				Mask: net.CIDRMask(36, 128),
+				IP:   net.IPv6loopback,
+			},
+		}
+		req, err := dhcpv6.NewSolicit(claddr, dhcpv6.WithIAPD([4]byte{1, 2, 3, 4}, &pref))
 		require.NoError(t, err)
 		resp, err := dhcpv6.NewAdvertiseFromSolicit(req)
 		require.NoError(t, err)
@@ -173,6 +182,47 @@ func TestHandler6(t *testing.T) {
 		if assert.Equal(t, 1, len(res)) {
 			opt := result.GetOneOption(dhcpv6.OptionIANA)
 			assert.Contains(t, opt.String(), "IP=fedb::1")
+		}
+		assert.Equal(t, 0, len(result.GetOption(dhcpv6.OptionIAPD)))
+	})
+
+	t.Run("prefix allocation", func(t *testing.T) {
+		tmp, cleanup := makeConfig(t)
+		defer cleanup()
+		state := newStateFromFile(t, tmp.Name())
+
+		// prepare DHCPv6 request
+		mac := "11:22:33:44:ff:ff"
+		claddr, _ := net.ParseMAC(mac)
+		pref := dhcpv6.OptIAPrefix{
+			PreferredLifetime: 0xaabbccdd * time.Second,
+			ValidLifetime:     0xeeff0011 * time.Second,
+			Prefix: &net.IPNet{
+				Mask: net.CIDRMask(36, 128),
+				IP:   net.IPv6loopback,
+			},
+		}
+		req, err := dhcpv6.NewSolicit(claddr, dhcpv6.WithIAPD([4]byte{1, 2, 3, 4}, &pref))
+		require.NoError(t, err)
+		resp, err := dhcpv6.NewAdvertiseFromSolicit(req)
+		require.NoError(t, err)
+		assert.Equal(t, 0, len(resp.GetOption(dhcpv6.OptionIANA)))
+
+		relay, err := dhcpv6.EncapsulateRelay(req, dhcpv6.MessageTypeRelayForward, net.ParseIP("f0db:f0db:f0db::1"), net.ParseIP("f2db:f2db::2"))
+		require.NoError(t, err)
+		opt := dhcpv6.OptInterfaceID([]byte("us-ca-sfba.prod.example.com:Eth12/1(Port12)"))
+		relay.UpdateOption(opt)
+		result, stop := state.Handler6(relay, resp)
+		assert.False(t, stop)
+		res := result.GetOption(dhcpv6.OptionIANA)
+		if assert.Equal(t, 1, len(res)) {
+			opt := result.GetOneOption(dhcpv6.OptionIANA)
+			assert.Contains(t, opt.String(), "IP=fedb::2")
+		}
+		iapd := result.GetOption(dhcpv6.OptionIAPD)
+		if assert.Equal(t, 1, len(iapd)) {
+			opt := result.GetOneOption(dhcpv6.OptionIAPD)
+			assert.Contains(t, opt.String(), "Prefix=fedb:ffff::/60")
 		}
 	})
 

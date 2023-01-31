@@ -63,6 +63,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"net/netip"
 	"strconv"
 	"sync"
 	"time"
@@ -153,8 +154,8 @@ type LeaseEvent struct {
 
 type Lease struct {
 	mac     string     // empty if default lease on this port
-	host4, host6 net.IP
-	prefix  net.IPNet  // zero-bit mask if no prefix is available
+	host4, host6 netip.Addr
+	prefix  netip.Prefix // zero-bit mask if no prefix is available
 	expires time.Time  // IsZero() if no lease issued since we started
 	ultimate, penultimate LeaseEvent
 	interfaceid string
@@ -176,20 +177,22 @@ func (lease *Lease) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		lease.mac = hwaddr.String()
 	}
 	for _, token := range tokens[1:] {
-		if _, prefix, _ := net.ParseCIDR(token); prefix != nil {
-			ones, _ := lease.prefix.Mask.Size()
-			if ones > 0 {
+		if prefix, err := netip.ParsePrefix(token); err == nil {
+			if lease.prefix.Bits() > 0 {
 				return fmt.Errorf("two prefixes for lease %s", tokens)
 			}
-			lease.prefix = *prefix
-		} else if ip := net.ParseIP(token); ip != nil {
-			if ipv4 := ip.To4(); ipv4 != nil {
-				if len(lease.host4) != 0 {
+			if lease.prefix != lease.prefix.Masked() {
+				return fmt.Errorf("prefix %s not in canonical form %s", lease.prefix, lease.prefix.Masked())
+			}
+			lease.prefix = prefix
+		} else if ip, err := netip.ParseAddr(token); err == nil {
+			if ip.Is4() {
+				if lease.host4.IsValid() {
 					return fmt.Errorf("two IPv4 hosts for lease %s", tokens)
 				}
-				lease.host4 = ipv4
+				lease.host4 = ip
 			} else {
-				if len(lease.host6) != 0 {
+				if lease.host6.IsValid() {
 					return fmt.Errorf("two IPv6 hosts for lease %s", tokens)
 				}
 				lease.host6 = ip
@@ -311,24 +314,27 @@ func allocate6(lease *Lease, duration time.Duration, msg *dhcpv6.Message, resp *
 	var ianaResp *dhcpv6.OptIANA
 	var iapdResp *dhcpv6.OptIAPD
 
-	if iana := msg.Options.OneIANA(); iana != nil && len(lease.host6) > 0 {
+	if iana := msg.Options.OneIANA(); iana != nil && lease.host6.IsValid() {
 		ianaResp = &dhcpv6.OptIANA{
 			IaId: iana.IaId,
 		}
 		ianaResp.Options.Add(&dhcpv6.OptIAAddress{
-			IPv6Addr:          lease.host6,
+			IPv6Addr:          net.IP(lease.host6.AsSlice()),
 			PreferredLifetime: duration,
 			ValidLifetime:     duration,
 		})
 		(*resp).AddOption(ianaResp)
 	}
-	_, bits := lease.prefix.Mask.Size()
-	if iapd := msg.Options.OneIAPD(); iapd != nil && bits > 0 {
+	if iapd := msg.Options.OneIAPD(); iapd != nil && lease.prefix.Bits() > 0 {
 		iapdResp = &dhcpv6.OptIAPD{
 			IaId: iapd.IaId,
 		}
+		prefix := net.IPNet{
+			IP:   net.IP(lease.prefix.Addr().AsSlice()),
+			Mask: net.CIDRMask(lease.prefix.Bits(), 128),
+		}
 		iapdResp.Options.Add(&dhcpv6.OptIAPrefix{
-			Prefix:            dup(&lease.prefix),
+			Prefix:            &prefix,
 			PreferredLifetime: duration,
 			ValidLifetime:     duration,
 		})
@@ -347,20 +353,6 @@ func allocate6(lease *Lease, duration time.Duration, msg *dhcpv6.Message, resp *
 		return true
 	}
 	return false
-}
-
-// We do a deep copy because this object is passed to other handlers
-// and it is conceivable they could modify it in place. We wouldn't
-// want that to change our lease database!
-
-func dup(thing *net.IPNet) (newthing *net.IPNet) {
-	newthing = &net.IPNet{
-		IP:   make(net.IP, net.IPv6len),
-		Mask: make(net.IPMask, net.IPv6len),
-	}
-	copy(newthing.IP, thing.IP)
-	copy(newthing.Mask, thing.Mask)
-	return newthing
 }
 
 func updateLeaseTime(lease *Lease, duration time.Duration, cid, vid string) {
@@ -413,8 +405,8 @@ func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bo
 }
 
 func allocate4(lease *Lease, duration time.Duration, msg, resp *dhcpv4.DHCPv4) bool {
-	if len(lease.host4) > 0 {
-		resp.YourIPAddr = lease.host4
+	if lease.host4.IsValid() {
+		resp.YourIPAddr = net.IP(lease.host4.AsSlice())
 		vid := msg.ClassIdentifier()
 		updateLeaseTime(lease, duration, msg.ClientHWAddr.String(), vid)
 		return true
