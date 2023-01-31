@@ -96,6 +96,9 @@ func (state *PluginState) UpdateFrom(newrouters []netip.Prefix) error {
 }
 
 func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bool) {
+	if req.OpCode != dhcpv4.OpcodeBootRequest {
+		return resp, false
+	}
 	if len(resp.YourIPAddr) == 0 || resp.YourIPAddr.IsUnspecified() {
 		log.Infof("not assigning router/subnet because yiaddr is not set")
 		return resp, false
@@ -116,8 +119,8 @@ func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bo
 		log.Warningf("no router found for %s", ip)
 		return resp, false
 	}
-	resp.UpdateOption(dhcpv4.OptRouter(routers...))
-	resp.UpdateOption(dhcpv4.OptSubnetMask(net.CIDRMask(bits, 32)))
+	resp.Options.Update(dhcpv4.OptRouter(routers...))
+	resp.Options.Update(dhcpv4.OptSubnetMask(net.CIDRMask(bits, 32)))
 	log.Infof("assigned routers %s netmask /%d for %s", routers, bits, ip)
 	return resp, false
 }
