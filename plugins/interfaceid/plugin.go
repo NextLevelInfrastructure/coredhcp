@@ -31,9 +31,9 @@
 //
 //  $ cat interfaceid_leases.txt
 //  us-ca-sfba.prod.example.com:Eth12/1(Port12):
-//    - [00:11:22:33:44:55 10.0.0.1]
-//    - [01:23:45:67:89:01 fedb::a]
-//    - [default 10.1.2.3 fedb::1 fedb:ffff::/60]
+//    - [00:11:22:33:44:55, 10.0.0.1]
+//    - [01:23:45:67:89:01, fedb::a]
+//    - [default, 10.1.2.3, fedb::1, fedb:ffff::/60]
 //
 // The plugin is configured once in the server6 section and once in the
 // server4 section of coredhcp's config file. Pass the lease duration as
@@ -95,12 +95,12 @@ type PluginState struct {
 	sync.Mutex
 	Filename string
 	watcher  *fsnotify.Watcher  // close this to make reload goroutine exit
-        Duration int
-        LeaseByMac       *LeaseMap
-	LeaseByInterface *LeaseMap
+        Duration time.Duration
+        LeaseByMac       LeaseMap
+	LeaseByInterface LeaseMap
 }
 
-func LoadLeases(filename string) (*LeaseMap, error) {
+func LoadLeases(filename string) (LeaseMap, error) {
 	yamlfile, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return nil, err
@@ -109,15 +109,15 @@ func LoadLeases(filename string) (*LeaseMap, error) {
 	if err = yaml.Unmarshal(yamlfile, &leases); err != nil {
 		return nil, err
 	}
-	return &leases, nil
+	return leases, nil
 }
 
 // We pre-process the lease map to speed up certain operations and find errors.
 // If an error is returned, state has not been changed (but newleases may have been).
 
-func (state *PluginState) UpdateFrom(newleases *LeaseMap) error {
+func (state *PluginState) UpdateFrom(newleases LeaseMap) error {
 	macleases := make(LeaseMap)
-	for interfaceid, leases := range *newleases {
+	for interfaceid, leases := range newleases {
 		for idx, lease := range leases {
 			if len(lease.mac) == 0 {
 				if idx > 0 {
@@ -141,7 +141,7 @@ func (state *PluginState) UpdateFrom(newleases *LeaseMap) error {
 
 	state.Lock()
 	defer state.Unlock()
-	state.LeaseByMac = &macleases
+	state.LeaseByMac = macleases
 	state.LeaseByInterface = newleases
 	return nil
 }
@@ -274,7 +274,7 @@ func (state *PluginState) Handler6(req, resp dhcpv6.DHCPv6) (dhcpv6.DHCPv6, bool
 
 func (state *PluginState) lookup(macstr, peerstr, linkstr, intfstr string) []Lease {
 	log.Debugf("checking lease for peer %s, interface %s, link %s, MAC %s", peerstr, intfstr, linkstr, macstr)
-	if macleases, ok := (*state.LeaseByMac)[macstr]; ok {
+	if macleases, ok := state.LeaseByMac[macstr]; ok {
 		if macleases[0].interfaceid == intfstr {
 			log.Infof("allocating pinned MAC %s on expected interface", macstr)
 			return macleases
@@ -282,19 +282,19 @@ func (state *PluginState) lookup(macstr, peerstr, linkstr, intfstr string) []Lea
 			log.Warningf("pinned MAC %s on interface %s but expected %s, using interface/link default", macstr, intfstr, macleases[0].interfaceid)
 		}
 	}
-	if leases, ok := (*state.LeaseByInterface)[peerstr + "!" + intfstr]; ok {
+	if leases, ok := state.LeaseByInterface[peerstr + "!" + intfstr]; ok {
 		log.Infof("allocating MAC %s on peer %s intf %s", macstr, peerstr, intfstr)
 		return leases
 	}
-	if leases, ok := (*state.LeaseByInterface)[intfstr]; ok {
+	if leases, ok := state.LeaseByInterface[intfstr]; ok {
 		log.Infof("allocating MAC %s on intf %s (peer %s default)", macstr, intfstr, peerstr)
 		return leases
 	}
-	if leases, ok := (*state.LeaseByInterface)[peerstr + "!" + linkstr]; ok {
+	if leases, ok := state.LeaseByInterface[peerstr + "!" + linkstr]; ok {
 		log.Infof("allocating MAC %s on peer %s link %s", macstr, peerstr, linkstr)
 		return leases
 	}
-	if leases, ok := (*state.LeaseByInterface)[linkstr]; ok {
+	if leases, ok := state.LeaseByInterface[linkstr]; ok {
 		log.Infof("allocating MAC %s on link %s (peer %s default)", macstr, linkstr, peerstr)
 		return leases
 	}
@@ -307,7 +307,7 @@ func (state *PluginState) lookup(macstr, peerstr, linkstr, intfstr string) []Lea
 // prefix to the first IA_PD. We don't try to do anything smart to allocate
 // our address or prefix to the "best" IA.
 
-func allocate6(lease *Lease, duration int, msg *dhcpv6.Message, resp *dhcpv6.DHCPv6) bool {
+func allocate6(lease *Lease, duration time.Duration, msg *dhcpv6.Message, resp *dhcpv6.DHCPv6) bool {
 	var ianaResp *dhcpv6.OptIANA
 	var iapdResp *dhcpv6.OptIAPD
 
@@ -317,8 +317,8 @@ func allocate6(lease *Lease, duration int, msg *dhcpv6.Message, resp *dhcpv6.DHC
 		}
 		ianaResp.Options.Add(&dhcpv6.OptIAAddress{
 			IPv6Addr:          lease.host6,
-			PreferredLifetime: time.Duration(duration) * time.Second,
-			ValidLifetime:     time.Duration(duration) * time.Second,
+			PreferredLifetime: duration,
+			ValidLifetime:     duration,
 		})
 		(*resp).AddOption(ianaResp)
 	}
@@ -329,8 +329,8 @@ func allocate6(lease *Lease, duration int, msg *dhcpv6.Message, resp *dhcpv6.DHC
 		}
 		iapdResp.Options.Add(&dhcpv6.OptIAPrefix{
 			Prefix:            dup(&lease.prefix),
-			PreferredLifetime: time.Duration(duration) * time.Second,
-			ValidLifetime:     time.Duration(duration) * time.Second,
+			PreferredLifetime: duration,
+			ValidLifetime:     duration,
 		})
 		(*resp).AddOption(iapdResp)
 	}
@@ -349,6 +349,10 @@ func allocate6(lease *Lease, duration int, msg *dhcpv6.Message, resp *dhcpv6.DHC
 	return false
 }
 
+// We do a deep copy because this object is passed to other handlers
+// and it is conceivable they could modify it in place. We wouldn't
+// want that to change our lease database!
+
 func dup(thing *net.IPNet) (newthing *net.IPNet) {
 	newthing = &net.IPNet{
 		IP:   make(net.IP, net.IPv6len),
@@ -359,7 +363,7 @@ func dup(thing *net.IPNet) (newthing *net.IPNet) {
 	return newthing
 }
 
-func updateLeaseTime(lease *Lease, duration int, cid, vid string) {
+func updateLeaseTime(lease *Lease, duration time.Duration, cid, vid string) {
 	now := time.Now()
 	event := LeaseEvent{
 		clientid: cid,
@@ -368,25 +372,17 @@ func updateLeaseTime(lease *Lease, duration int, cid, vid string) {
 	}
 	if event.clientid != lease.ultimate.clientid && event.clientid != lease.penultimate.clientid {
 		if now.Sub(lease.penultimate.issued) < reissueWarningDuration {
-			log.Warningf("lease issued to 3 clients within %d sec: %s/%s %s/%s %s/%s %s %s", reissueWarningDuration, event.clientid, event.vendorid, lease.ultimate.clientid, lease.ultimate.vendorid, lease.penultimate.clientid, lease.penultimate.vendorid, lease.String(), lease.interfaceid)
+			log.Warningf("lease issued to 3 clients within %s: %s/%s %s/%s %s/%s %s %s", reissueWarningDuration, event.clientid, event.vendorid, lease.ultimate.clientid, lease.ultimate.vendorid, lease.penultimate.clientid, lease.penultimate.vendorid, lease, lease.interfaceid)
 		}
 		lease.penultimate = lease.ultimate
 	} else if event.clientid != lease.ultimate.clientid {
 		lease.penultimate = lease.ultimate
 	}
 	lease.ultimate = event
-	lease.expires = now.Add(time.Duration(duration) * time.Second)
+	lease.expires = now.Add(duration)
 }
 
-// Handler4 handles DHCPv4 packets for the interfaceid plugin
-
-	// other plugins should handle (see DHCPv4 methods for most of these):
-	//   OptionRouter (reads a list of CIDR addresses)
-	//   OptionSubnetMask
-	//   OptionDomainName
-	//   OptionDomainNameServer
-	//   ServerIdentifierOverrideSubOption (so relay sees unicast server traffic)
-	// RelaySourcePortSubOption (not needed for us) would tell which UDP port to reply to
+// Handler4 handles DHCPv4 packets for the interfaceid plugin.
 
 func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bool) {
 	rai := req.RelayAgentInfo()
@@ -416,7 +412,7 @@ func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bo
 	return resp, false
 }
 
-func allocate4(lease *Lease, duration int, msg, resp *dhcpv4.DHCPv4) bool {
+func allocate4(lease *Lease, duration time.Duration, msg, resp *dhcpv4.DHCPv4) bool {
 	if len(lease.host4) > 0 {
 		resp.YourIPAddr = lease.host4
 		vid := msg.ClassIdentifier()
@@ -446,12 +442,13 @@ func (state *PluginState) FromArgs(args ...string) error {
 	if len(args) < 2 {
 		return errors.New("need duration and filename arguments")
 	}
-	var err error
-	if state.Duration, err = strconv.Atoi(args[0]); err != nil {
+	if duration, err := strconv.Atoi(args[0]); err == nil {
+		if duration < 1 {
+			return fmt.Errorf("duration %s must be positive", args[0])
+		}
+		state.Duration = time.Duration(duration) * time.Second
+	} else {
 		return fmt.Errorf("duration %s must be an integer", args[0])
-	}
-	if state.Duration < 1 {
-		return fmt.Errorf("duration %s must be positive", args[0])
 	}
 	state.Filename = args[1]
 	if state.Filename == "" {
@@ -493,13 +490,13 @@ func (state *PluginState) FromArgs(args ...string) error {
 				log.Warningf("failed to refresh from %s: %s", state.Filename, err)
 				continue
 			}
-			log.Infof("refreshing %d interfaces", len(*newones))
+			log.Infof("refreshed %s with %d interfaces", state.Filename, len(newones))
 			if err := state.UpdateFrom(newones); err != nil {
 				log.Warningf("failed to update during refresh of %s: %s", state.Filename, err)
 				continue
 			}
 		}
-		log.Warningf("file refresh watcher was closed")
+		log.Warningf("file refresh watcher was closed: %s", state.Filename)
 	}()
 	return nil
 }

@@ -22,15 +22,13 @@ func makeConfig(t *testing.T) (*os.File, func()) {
 	require.NoError(t, err)
 
 	// fill temp file with valid lease lines and some comments
-	_, err = tmp.WriteString("us-ca-sfba.prod.example.com:Eth12/1(Port12):\n")
-	require.NoError(t, err)
-	_, err = tmp.WriteString("  - [00:11:22:33:44:55, 192.0.2.100]\n")
-	require.NoError(t, err)
-	_, err = tmp.WriteString("  - [default, 192.0.2.101, fedb::2, fedb:ffff::/60]\n")
-	require.NoError(t, err)
-	_, err = tmp.WriteString("  - [11:22:33:44:55:66, fedb::1]\n")
-	require.NoError(t, err)
-	_, err = tmp.WriteString("# this is a comment\n")
+	_, err = tmp.WriteString(`
+us-ca-sfba.prod.example.com:Eth12/1(Port12):
+ - [00:11:22:33:44:55, 192.0.2.100]
+ - [default, 192.0.2.101, fedb::2, fedb:ffff::/60]
+ - [11:22:33:44:55:66, fedb::1]
+# this is a comment
+`)
 	require.NoError(t, err)
 
 	return tmp, func() {
@@ -46,7 +44,7 @@ func newStateFromFile(t *testing.T, filename string) *PluginState {
 	}
 	var state PluginState
 	state.Filename = filename
-	state.Duration = 3600
+	state.Duration = time.Duration(3600) * time.Second
 	state.UpdateFrom(leases)
 	return &state
 }
@@ -62,16 +60,16 @@ func TestLoadRecords(t *testing.T) {
 		}
 
 		key := "us-ca-sfba.prod.example.com:Eth12/1(Port12)"
-		if assert.Equal(t, 1, len(*leases)) {
-			assert.Contains(t, *leases, key)
+		if assert.Equal(t, 1, len(leases)) {
+			assert.Contains(t, leases, key)
 		}
 
 		state := newStateFromFile(t, tmp.Name())
-		if assert.Equal(t, 2, len(*state.LeaseByMac)) {
-			assert.Equal(t, net.ParseIP("fedb::1"), (*state.LeaseByMac)["11:22:33:44:55:66"][0].host6)
+		if assert.Equal(t, 2, len(state.LeaseByMac)) {
+			assert.Equal(t, net.ParseIP("fedb::1"), state.LeaseByMac["11:22:33:44:55:66"][0].host6)
 		}
-		if assert.Equal(t, 1, len(*state.LeaseByInterface)) {
-			leases := (*state.LeaseByInterface)[key]
+		if assert.Equal(t, 1, len(state.LeaseByInterface)) {
+			leases := state.LeaseByInterface[key]
 			assert.Equal(t, 3, len(leases))
 		}
 	})
@@ -186,7 +184,7 @@ func TestHandler6(t *testing.T) {
 		err := state.FromArgs("84600", tmp.Name(), autoRefreshArg)
 		require.NoError(t, err)
 
-		assert.Equal(t, 1, len(*state.LeaseByInterface))
+		assert.Equal(t, 1, len(state.LeaseByInterface))
 
 		// we add more leases to the file
 		// this should trigger an event to refresh the leases database
@@ -202,6 +200,7 @@ func TestHandler6(t *testing.T) {
 		state.Lock()
 		defer state.Unlock()
 
-		assert.Equal(t, 2, len(*state.LeaseByInterface))
+		assert.Equal(t, 2, len(state.LeaseByInterface))
+		state.watcher.Close()
 	})
 }
