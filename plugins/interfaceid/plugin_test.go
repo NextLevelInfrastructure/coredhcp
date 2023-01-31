@@ -116,17 +116,18 @@ func TestHandler4(t *testing.T) {
 		// prepare DHCPv4 request
 		mac := "00:11:22:33:44:55"
 		claddr, _ := net.ParseMAC(mac)
-		req := &dhcpv4.DHCPv4{
-			ClientHWAddr: claddr,
-		}
-		resp := &dhcpv4.DHCPv4{}
-		assert.Nil(t, resp.ClientIPAddr)
+		req, err := dhcpv4.NewDiscovery(claddr)
+		assert.NoError(t, err)
+		resp, err := dhcpv4.NewReplyFromRequest(req)
+		assert.NoError(t, err)
+		resp.UpdateOption(dhcpv4.OptMessageType(dhcpv4.MessageTypeOffer))
+		assert.True(t, resp.ClientIPAddr.IsUnspecified())
 
 		// nothing should change since there is no interface in the request
 		result, stop := state.Handler4(req, resp)
 		assert.Same(t, result, resp)
 		assert.False(t, stop)
-		assert.Nil(t, result.YourIPAddr)
+		assert.True(t, result.YourIPAddr.IsUnspecified())
 
 		desired_clientip := net.ParseIP("192.0.2.100")
 		req.GatewayIPAddr = net.ParseIP("10.0.0.10")

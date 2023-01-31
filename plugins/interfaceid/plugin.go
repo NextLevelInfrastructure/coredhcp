@@ -5,6 +5,10 @@
 // This plugin assigns addresses and prefixes based on the interface-id or
 // circuit-id attached to the request by a DHCP relay agent.
 // This plugin ignores requests that did not arrive via a relay.
+// If the DHCPv4 response already contains an address assignment,
+// we pass. If the DHCPv6 response already contains an assignment
+// for the first IA_NA and the first IA_PD, we pass. We never
+// try to assign for IA_NA or IA_PD beyond the first.
 
 // The plugin binds a specific MAC to an IP address and/or prefix on
 // one interface, and a default IP address and/or prefix may be specified
@@ -377,6 +381,14 @@ func updateLeaseTime(lease *Lease, duration time.Duration, cid, vid string) {
 }
 
 func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bool) {
+	if req.OpCode != dhcpv4.OpcodeBootRequest {
+		log.Warningf("not a BootRequest, ignoring %d", req.OpCode)
+		return resp, false
+	}
+	if len(req.YourIPAddr) > 0 && !req.YourIPAddr.IsUnspecified() {
+		// already allocated
+		return resp, false
+	}
 	rai := req.RelayAgentInfo()
 	if rai == nil || len(req.GatewayIPAddr) == 0 || req.GatewayIPAddr.IsUnspecified() {
 		log.Debug("not a relay message so no interface ID or link, passing")
@@ -407,6 +419,7 @@ func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bo
 func allocate4(lease *Lease, duration time.Duration, msg, resp *dhcpv4.DHCPv4) bool {
 	if lease.host4.IsValid() {
 		resp.YourIPAddr = net.IP(lease.host4.AsSlice())
+		resp.Options.Update(dhcpv4.OptIPAddressLeaseTime(duration))
 		vid := msg.ClassIdentifier()
 		updateLeaseTime(lease, duration, msg.ClientHWAddr.String(), vid)
 		return true
