@@ -96,10 +96,10 @@ func LoadRouters(filename string) ([]netip.Prefix, error) {
 func (state *PluginState) UpdateFrom(newrouters []netip.Prefix) error {
 	for _, prefix := range newrouters {
 		if !prefix.Addr().Is4() {
-			return fmt.Errorf("router %s is IPv6 but DHCPv6 clients get routers from Router Advertisements, not DHCP", prefix)
+			return fmt.Errorf("router interface %s is IPv6 but DHCPv6 clients get routers from Router Advertisements, not DHCP", prefix)
 		}
 		if prefix.Bits() < 1 {
-			return fmt.Errorf("router %s has 0 netmask but you're telling me it's a router?", prefix)
+			return fmt.Errorf("router interface %s has 0 netmask but you're telling me it's a router interface?", prefix)
 		}
 	}
 	for idx, prefix := range newrouters[1:] {
