@@ -15,9 +15,8 @@
 
 // We sequentially search all routers for every request, and at load time
 // our error checks are O(n^2) in the number of routers. If you use
-// more than a few hundred routers you'd want to change that to use a map
-// from network number to []netip.Prefix, so you only need to do O(30) map
-// lookups per request.
+// more than a few hundred routers you'd want to change that to use
+// something like netaddr.IPSet.
 
 package routercidr
 
@@ -90,8 +89,8 @@ func (state *PluginState) UpdateFrom(newrouters []netip.Prefix) error {
 		}
 	}
 	state.Lock()
-	defer state.Unlock()
 	state.Routers = newrouters
+	state.Unlock()
 	return nil
 }
 
