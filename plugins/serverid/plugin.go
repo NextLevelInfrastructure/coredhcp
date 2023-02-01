@@ -2,6 +2,40 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 
+// This plugin tells the client our server ID and then, on subsequent
+// requests, verifies that the client has sent back our server ID.
+
+// Clients may send messages to multiple servers by direct broadcast.
+// Relays may also forward client messages to multiple servers.
+// In either case, a client will receive responses from multiple
+// servers and the client will choose one server. This plugin ensures
+// that the unchosen servers drop subsequent messages that
+// the client intends to send to the chosen one.
+
+// Since this plugin drops packets intended for other servers, it should
+// be the first plugin in the configuration. An earlier plugin might
+// change state (e.g. record a lease) for a message that shouldn't be
+// processed.
+
+// Every coredhcp server should use this plugin. Even if you only run
+// one DHCP server, you never know when some new device might start
+// providing a rogue DHCP service. The log messages from this plugin
+// may be your first indication that has happened. Also, this plugin is
+// required for RFC 8415-compliant DHCPv6 behavior, and without a
+// serverid, a DHCPv4 client cannot send renewal or release messages.
+
+// The DHCPv4 plugin optionally accepts a list of RFC 5107 server
+// identififer overrides that it should accept. It ignores any
+// overrides that are not on the list. An override provided by a
+// DHCPv4 relay agent is usually the IP address of the relay agent
+// itself, and is typically used to cause the client to send (unicast)
+// renewal and release messages via the relay agent instead of directly
+// to the server.
+
+// Note that DHCPv4 relay agents which provide a server identifier
+// override must send client requests to only one DHCP server, because
+// the serverid no longer distinguishes between responding servers.
+
 package serverid
 
 import (
@@ -117,7 +151,7 @@ func parseIP4(arg string) (net.IP, error) {
 	if serverID == nil {
 		return nil, errors.New("invalid or empty IP address")
 	}
-	if serverID.To4() == nil {
+	if serverID.To4() == nil || serverID.IsUnspecified() {
 		return nil, errors.New("not a valid IPv4 address")
 	}
 	return serverID.To4(), nil
@@ -131,6 +165,7 @@ func setup4(args ...string) (handler.Handler4, error) {
 	var err error
 	if args[0] == "override_only" {
 		v4ServerID = nil
+		log.Infof("rejecting all requests except for authorized relays")
 	} else if v4ServerID, err = parseIP4(args[0]); err != nil {
 		log.Errorf("error parsing serverid %s: %v", args[0], err)
 		return nil, err
@@ -143,6 +178,12 @@ func setup4(args ...string) (handler.Handler4, error) {
 			log.Errorf("error parsing override %s: %v", arg, err)
 			return nil, err
 		}
+	}
+	if v4Overrides != nil {
+		log.Infof("accepting serverid overrides for authorized relays %s", v4Overrides)
+	}
+	if v4ServerID == nil && v4Overrides == nil {
+		return nil, errors.New("override_only requires at least one authorized relay")
 	}
 	return Handler4, nil
 }
@@ -187,7 +228,7 @@ func setup6(args ...string) (handler.Handler6, error) {
 	default:
 		return nil, errors.New("Opaque DUID type not supported yet")
 	}
-	log.Printf("using %s %s", duidType, duidValue)
+	log.Infof("using %s %s", duidType, duidValue)
 
 	return Handler6, nil
 }
