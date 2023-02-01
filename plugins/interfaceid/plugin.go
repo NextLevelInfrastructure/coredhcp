@@ -2,44 +2,48 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 
-// This plugin assigns addresses and prefixes based on the interface-id or
-// circuit-id attached to the request by a DHCP relay agent.
-// This plugin ignores requests that did not arrive via a relay.
-// If the DHCPv4 response already contains an address assignment,
-// we pass. If the DHCPv6 response already contains an assignment
-// for the first IA_NA and the first IA_PD, we pass. We never
-// try to assign for IA_NA or IA_PD beyond the first.
+// This plugin assigns addresses and prefixes based on the circuit-id
+// or interface-id or linkaddress attached to the request by a DHCP
+// relay agent. This plugin ignores requests that did not arrive via
+// a relay. If the DHCPv4 response already contains an address
+// assignment, we pass. If the DHCPv6 response already contains an
+// assignment for any IA_NA or IA_PD, we pass.
 
-// The plugin binds a specific MAC to an IP address and/or prefix on
-// one interface, and a default IP address and/or prefix may be specified
-// for allocation to any other client making a request on that interface.
+// For each circuit-id or interface-id, a default IP and/or prefix
+// will be assigned for any request. In addition, there may be
+// zero or more MAC addresses each with an IP and/or prefix that
+// will be assigned for requests on that circuit/interface,
+// instead of the default. If you want to pin a MAC address to a
+// specific IP and/or prefix regardless of which circuit/interface
+// the request arrives on, use the file plugin instead.
 
-// The default IP address and/or prefix will be allocated to any
-// client making a request from that port even if a different client already
-// has an unexpired lease. This type of lease contract is appropriate for
-// ISP subscribers who are allowed to connect only one router to their
-// subscriber port.
+// The default IP address and/or prefix will be allocated to any client
+// making a request from that port even if a different client already
+// has an unexpired lease. This type of lease contract is appropriate
+// for ISP subscribers who are allowed to connect only one router to
+// their subscriber port.
 
-// The mapping is stored in a YAML file, with one map key for each port.
-// The map value is a list of leases, where each lease is a list whose
-// first element is a MAC address and subsequent elements are IPv4 or
-// IPv6 addresses and/or an IPv6 prefix in CIDR form. The default
-// mapping for a section is the same except the first field is "default".
+// The plugin is configured via a YAML file, with one map key for each
+// port. The value of the interfaceid map is a list of leases, where
+// each lease is a list whose first element is a MAC address and
+// subsequent elements are IPv4 or IPv6 addresses and/or an IPv6 prefix
+// in CIDR form. The default mapping for a section is the same except
+// the first element is "default".
 //
 // A map key matches a request if the most-encapsulated relay message in
-// the request has interfaceid OR linkaddress equal to the key, or if
-// peeraddress!interfaceid OR peeraddress!linkaddress is equal to the key.
+// the request has interface-id OR linkaddress equal to the key, or if
+// peeraddress!interface-id OR peeraddress!linkaddress is equal to the key.
 //
 // It is an error for the same MAC address to appear in more than one key.
 // A lease file with errors will not be loaded.
 //
-//  $ cat interfaceid_leases.txt
+//  $ cat interfaceid_leases.yml
 //  interfaceid:
-//    us-ca-sfba.prod.example.com:Eth12/1(Port12):
+//    router1.us-ca-sfba.prod.example.com:Eth12/1(Port12):
 //      - [00:11:22:33:44:55, 10.0.0.1]
 //      - [01:23:45:67:89:01, fedb::a]
 //      - [default, 10.1.2.3, fedb::1, fedb:ffff::/60]
-//    us-ca-sfba.prod.example.com:Eth13/1(Port13):
+//    router1.us-ca-sfba.prod.example.com:Eth13/1(Port13):
 //      - [...]
 //
 // The plugin is configured once in the server6 section and once in the
@@ -50,18 +54,15 @@
 // different leases files of course.
 //
 //  $ cat config.yml
-//
 //  server6:
 //     ...
 //     plugins:
-//       - interfaceid: 86400 "interfaceid_leases.txt" autorefresh
+//       - interfaceid: 86400 "interfaceid_leases.yml" autorefresh
 //     ...
 //
 // If the file path is not absolute, it is relative to the cwd where coredhcp
-// is run.
-//
-// If the optional "autorefresh" argument is given, the plugin will try to
-// refresh the lease mappings at runtime whenever the lease file is updated.
+// is run. If the optional "autorefresh" argument is given, the plugin will try
+// to refresh the lease mappings at runtime whenever the lease file is updated.
 
 package interfaceid
 
@@ -149,10 +150,18 @@ func (state *PluginState) UpdateFrom(newleases LeaseMap) error {
 	}
 
 	state.Lock()
-	defer state.Unlock()
 	state.LeaseByMac = macleases
 	state.LeaseByInterface = newleases
+	state.Unlock()
 	return nil
+}
+
+func (state *PluginState) LoadAndUpdate() error {
+	newleases, err := LoadLeases(state.Filename)
+	if err != nil {
+		return err
+	}
+	return state.UpdateFrom(newleases)
 }
 
 type LeaseEvent struct {
@@ -257,6 +266,10 @@ func (state *PluginState) Handler6(req, resp dhcpv6.DHCPv6) (dhcpv6.DHCPv6, bool
 		log.Errorf("could not decapsulate inner message: %v", err)
 		return nil, true
 	}
+	if msg.Options.OneIANA() == nil && msg.Options.OneIAPD() == nil {
+		log.Debug("no non-temporary address requested, passing")
+		return resp, false
+	}
 	mac, err := dhcpv6.ExtractMAC(req)
 	if err != nil {
 		log.Warningf("request contains no client MAC, passing")
@@ -271,10 +284,6 @@ func (state *PluginState) Handler6(req, resp dhcpv6.DHCPv6) (dhcpv6.DHCPv6, bool
 	if intf := inner.Options.InterfaceID(); intf != nil {
 		intfstr = string(intf)
 	}
-	if msg.Options.OneIANA() == nil && msg.Options.OneIAPD() == nil {
-		log.Debug("no non-temporary address requested, passing")
-		return resp, false
-	}
 
 	state.Lock()
 	defer state.Unlock()
@@ -285,7 +294,7 @@ func (state *PluginState) Handler6(req, resp dhcpv6.DHCPv6) (dhcpv6.DHCPv6, bool
 			log.Warningf("MAC %s peer %s link %s has no DHCPv6 address in lease", mac.String(), peerstr, linkstr)
 		}
 	} else {
-		log.Warningf("MAC %s peer %s link %s has no DHCPv6 lease", mac.String(), peerstr, linkstr)
+		log.Infof("MAC %s peer %s link %s has no DHCPv6 lease", mac.String(), peerstr, linkstr)
 	}
 	return resp, false
 }
@@ -323,7 +332,7 @@ func (state *PluginState) lookup(macstr, peerstr, linkstr, intfstr string) []Lea
 // IPv6 address, we allocate that address to the first IA_NA. If the client has
 // asked for a prefix (IA_PD) and our lease has a prefix, we allocate that
 // prefix to the first IA_PD. We don't try to do anything smart to allocate
-// our address or prefix to the "best" IA.
+// our address or prefix to the "best" IA with the closest matching hint.
 
 func allocate6(lease *Lease, duration time.Duration, msg *dhcpv6.Message, resp *dhcpv6.DHCPv6) bool {
 	var ianaResp *dhcpv6.OptIANA
@@ -344,12 +353,11 @@ func allocate6(lease *Lease, duration time.Duration, msg *dhcpv6.Message, resp *
 		iapdResp = &dhcpv6.OptIAPD{
 			IaId: iapd.IaId,
 		}
-		prefix := net.IPNet{
-			IP:   net.IP(lease.prefix.Addr().AsSlice()),
-			Mask: net.CIDRMask(lease.prefix.Bits(), 128),
-		}
 		iapdResp.Options.Add(&dhcpv6.OptIAPrefix{
-			Prefix:            &prefix,
+			Prefix: &net.IPNet{
+				IP:   net.IP(lease.prefix.Addr().AsSlice()),
+				Mask: net.CIDRMask(lease.prefix.Bits(), 128),
+			},
 			PreferredLifetime: duration,
 			ValidLifetime:     duration,
 		})
@@ -395,7 +403,7 @@ func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bo
 		return resp, false
 	}
 	if len(req.YourIPAddr) > 0 && !req.YourIPAddr.IsUnspecified() {
-		// already allocated
+		log.Infof("response already contains IP allocation from previous plugin, passing")
 		return resp, false
 	}
 	rai := req.RelayAgentInfo()
@@ -409,6 +417,11 @@ func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bo
 		linkstr = ip.String()
 	}
 	intfstr := dhcpv4.GetString(dhcpv4.AgentCircuitIDSubOption, (*rai).Options)
+	if len(intfstr) == 0 {
+		if intfstr = dhcpv4.GetString(dhcpv4.AgentRemoteIDSubOption, (*rai).Options); len(intfstr) == 0 {
+			intfstr = "unspecified_interface"
+		}
+	}
 	mac := req.ClientHWAddr
 
 	state.Lock()
@@ -420,7 +433,7 @@ func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bo
 			log.Warningf("MAC %s peer %s link %s has no DHCPv4 address in lease", mac.String(), peerstr, linkstr)
 		}
 	} else {
-		log.Warningf("MAC %s peer %s link %s has no DHCPv4 lease", mac.String(), peerstr, linkstr)
+		log.Infof("MAC %s peer %s link %s has no DHCPv4 lease", mac.String(), peerstr, linkstr)
 	}
 	return resp, false
 }
@@ -471,11 +484,7 @@ func (state *PluginState) FromArgs(args ...string) error {
 
 	// if the autorefresh argument is not present, just load the leases
 	if len(args) < 3 || args[2] != autoRefreshArg {
-		leases, err := LoadLeases(state.Filename)
-		if err != nil {
-			return err
-		}
-		return state.UpdateFrom(leases)
+		return state.LoadAndUpdate()
 	}
 	// otherwise watch the lease file and reload on any event
 	watcher, err := fsnotify.NewWatcher()
@@ -487,27 +496,17 @@ func (state *PluginState) FromArgs(args ...string) error {
 		return fmt.Errorf("failed to watch %s: %w", state.Filename, err)
 	}
 	// avoid race by doing initial load only after we start watching
-	leases, err := LoadLeases(state.Filename)
-	if err != nil {
-		watcher.Close()
-		return err
-	}
-	if err := state.UpdateFrom(leases); err != nil {
+	if err := state.LoadAndUpdate(); err != nil {
 		watcher.Close()
 		return err
 	}
 	state.watcher = watcher
 	go func() {
 		for range watcher.Events {
-			newones, err := LoadLeases(state.Filename)
-			if err != nil {
+			if err := state.LoadAndUpdate(); err != nil {
 				log.Warningf("failed to refresh from %s: %s", state.Filename, err)
-				continue
-			}
-			log.Infof("refreshed %s with %d interfaces", state.Filename, len(newones))
-			if err := state.UpdateFrom(newones); err != nil {
-				log.Warningf("failed to update during refresh of %s: %s", state.Filename, err)
-				continue
+			} else {
+				log.Infof("refreshed %s", state.Filename)
 			}
 		}
 		log.Warningf("file refresh watcher was closed: %s", state.Filename)
