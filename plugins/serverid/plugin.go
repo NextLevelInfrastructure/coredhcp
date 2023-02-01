@@ -28,8 +28,9 @@ var Plugin = plugins.Plugin{
 
 // v6ServerID is the DUID of the v6 server
 var (
-	v6ServerID *dhcpv6.Duid
-	v4ServerID net.IP
+	v6ServerID  *dhcpv6.Duid
+	v4ServerID  net.IP
+	v4Overrides []net.IP
 )
 
 // Handler6 handles DHCPv6 packets for the server_id plugin.
@@ -52,12 +53,13 @@ func Handler6(req, resp dhcpv6.DHCPv6) (dhcpv6.DHCPv6, bool) {
 		if msg.MessageType == dhcpv6.MessageTypeSolicit ||
 			msg.MessageType == dhcpv6.MessageTypeConfirm ||
 			msg.MessageType == dhcpv6.MessageTypeRebind {
+			log.Debug("prohibited server ID is present, dropping")
 			return nil, true
 		}
 
 		// Approximately all others MUST be discarded if the ServerID doesn't match
 		if !sid.Equal(*v6ServerID) {
-			log.Infof("requested server ID does not match this server's ID. Got %v, want %v", sid, *v6ServerID)
+			log.Infof("request server ID %v does not match ours %v, dropping", sid, *v6ServerID)
 			return nil, true
 		}
 	} else if msg.MessageType == dhcpv6.MessageTypeRequest ||
@@ -66,6 +68,7 @@ func Handler6(req, resp dhcpv6.DHCPv6) (dhcpv6.DHCPv6, bool) {
 		msg.MessageType == dhcpv6.MessageTypeRelease {
 		// RFC8415 §16.{6,8,10,11}
 		// These message types MUST be discarded if they *don't* contain a ServerID option
+		log.Debug("missing required server ID, dropping")
 		return nil, true
 	}
 	dhcpv6.WithServerID(*v6ServerID)(resp)
@@ -74,25 +77,50 @@ func Handler6(req, resp dhcpv6.DHCPv6) (dhcpv6.DHCPv6, bool) {
 
 // Handler4 handles DHCPv4 packets for the server_id plugin.
 func Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bool) {
-	if v4ServerID == nil {
-		log.Fatal("BUG: Plugin is running uninitialized!")
-		return nil, true
-	}
 	if req.OpCode != dhcpv4.OpcodeBootRequest {
 		log.Warningf("not a BootRequest, ignoring")
 		return resp, false
 	}
+	serverid := v4ServerID
+	// If this is a relay request and the Relay Agent Information option
+	// contains a Server ID Override Sub-Option that we are willing to
+	// use, use it.
+	rai := req.RelayAgentInfo()
+	if v4Overrides != nil && rai != nil {
+		if ip := dhcpv4.GetIP(dhcpv4.ServerIdentifierOverrideSubOption, (*rai).Options); ip != nil {
+			for _, allowed := range v4Overrides {
+				if allowed.Equal(ip) {
+					serverid = allowed
+					break
+				}
+			}
+		}
+	}
+	if serverid == nil {
+		log.Infof("received request without an authorized override, dropping")
+		return nil, true
+	}
 	if req.ServerIPAddr != nil &&
 		!req.ServerIPAddr.Equal(net.IPv4zero) &&
-		!req.ServerIPAddr.Equal(v4ServerID) {
-		// This request is not for us, drop it.
-		log.Infof("requested server ID does not match this server's ID. Got %v, want %v", req.ServerIPAddr, v4ServerID)
+		!req.ServerIPAddr.Equal(serverid) {
+		log.Infof("request server ID %v does not match ours %v, dropping", req.ServerIPAddr, v4ServerID)
 		return nil, true
 	}
 	resp.ServerIPAddr = make(net.IP, net.IPv4len)
-	copy(resp.ServerIPAddr[:], v4ServerID)
-	resp.UpdateOption(dhcpv4.OptServerIdentifier(v4ServerID))
+	copy(resp.ServerIPAddr[:], serverid)
+	resp.UpdateOption(dhcpv4.OptServerIdentifier(serverid))
 	return resp, false
+}
+
+func parseIP4(arg string) (net.IP, error) {
+	serverID := net.ParseIP(arg)
+	if serverID == nil {
+		return nil, errors.New("invalid or empty IP address")
+	}
+	if serverID.To4() == nil {
+		return nil, errors.New("not a valid IPv4 address")
+	}
+	return serverID.To4(), nil
 }
 
 func setup4(args ...string) (handler.Handler4, error) {
@@ -100,14 +128,22 @@ func setup4(args ...string) (handler.Handler4, error) {
 	if len(args) < 1 {
 		return nil, errors.New("need an argument")
 	}
-	serverID := net.ParseIP(args[0])
-	if serverID == nil {
-		return nil, errors.New("invalid or empty IP address")
+	var err error
+	if args[0] == "override_only" {
+		v4ServerID = nil
+	} else if v4ServerID, err = parseIP4(args[0]); err != nil {
+		log.Errorf("error parsing serverid %s: %v", args[0], err)
+		return nil, err
 	}
-	if serverID.To4() == nil {
-		return nil, errors.New("not a valid IPv4 address")
+	v4Overrides = nil
+	for _, arg := range args[1:] {
+		if serverid, err := parseIP4(arg); err == nil {
+			v4Overrides = append(v4Overrides, serverid)
+		} else {
+			log.Errorf("error parsing override %s: %v", arg, err)
+			return nil, err
+		}
 	}
-	v4ServerID = serverID.To4()
 	return Handler4, nil
 }
 

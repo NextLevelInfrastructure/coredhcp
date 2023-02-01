@@ -8,7 +8,9 @@ import (
 	"net"
 	"testing"
 
+	"github.com/insomniacslk/dhcp/dhcpv4"
 	"github.com/insomniacslk/dhcp/dhcpv6"
+	"github.com/stretchr/testify/assert"
 )
 
 func makeTestDUID(uuid string) *dhcpv6.Duid {
@@ -16,6 +18,85 @@ func makeTestDUID(uuid string) *dhcpv6.Duid {
 		Type: dhcpv6.DUID_UUID,
 		Uuid: []byte(uuid),
 	}
+}
+
+func testv4setup(t *testing.T) (req, resp *dhcpv4.DHCPv4) {
+	_, err := setup4("2.4.6.8", "10.20.30.40", "100.200.3.4")
+	assert.NoError(t, err)
+
+	// prepare DHCPv4 request
+	mac := "00:11:22:33:44:55"
+	claddr, _ := net.ParseMAC(mac)
+	discovery_req, err := dhcpv4.NewDiscovery(claddr)
+	assert.NoError(t, err)
+	discovery_resp, err := dhcpv4.NewReplyFromRequest(discovery_req)
+	assert.NoError(t, err)
+	discovery_resp.UpdateOption(dhcpv4.OptMessageType(dhcpv4.MessageTypeOffer))
+	return discovery_req, discovery_resp
+}
+
+func TestAcceptServerIDV4(t *testing.T) {
+	discovery_req, discovery_resp := testv4setup(t)
+	// no serverid -- should be allowed
+	result, stop := Handler4(discovery_req, discovery_resp)
+	assert.Same(t, result, discovery_resp)
+	assert.False(t, stop)
+
+	discovery_req.ServerIPAddr = net.ParseIP("2.4.6.8").To4()
+	assert.True(t, result.ServerIPAddr.Equal(discovery_req.ServerIPAddr))
+
+	result, stop = Handler4(discovery_req, discovery_resp)
+	assert.Same(t, result, discovery_resp)
+	assert.False(t, stop)
+	assert.True(t, result.ServerIPAddr.Equal(discovery_req.ServerIPAddr))
+}
+
+func TestAcceptInitialOverrideV4(t *testing.T) {
+	discovery_req, discovery_resp := testv4setup(t)
+	// no serverid -- should be allowed
+	relayip := net.ParseIP("100.200.3.4").To4()
+	rai := dhcpv4.OptRelayAgentInfo(
+		dhcpv4.Option{Code: dhcpv4.ServerIdentifierOverrideSubOption, Value: dhcpv4.IP(relayip)},
+	)
+	discovery_req.UpdateOption(rai)
+	result, stop := Handler4(discovery_req, discovery_resp)
+	assert.Same(t, result, discovery_resp)
+	assert.False(t, stop)
+	assert.True(t, result.ServerIPAddr.Equal(relayip))
+}
+
+func TestRejectUnexpectedServerIDV4(t *testing.T) {
+	discovery_req, discovery_resp := testv4setup(t)
+
+	// relay serverid with no override -- should be rejected
+	discovery_req.ServerIPAddr = net.ParseIP("10.20.30.40").To4()
+	result, stop := Handler4(discovery_req, discovery_resp)
+	assert.Nil(t, result)
+	assert.True(t, stop)
+
+	// now add server option override -- should be allowed
+	rai := dhcpv4.OptRelayAgentInfo(
+		dhcpv4.Option{Code: dhcpv4.ServerIdentifierOverrideSubOption, Value: dhcpv4.IP(discovery_req.ServerIPAddr)},
+	)
+	discovery_req.UpdateOption(rai)
+	result, stop = Handler4(discovery_req, discovery_resp)
+	assert.Same(t, result, discovery_resp)
+	assert.False(t, stop)
+	assert.True(t, result.ServerIPAddr.Equal(discovery_req.ServerIPAddr))
+}
+
+func TestRejectUnexpectedServerIDOverride(t *testing.T) {
+	discovery_req, discovery_resp := testv4setup(t)
+
+	// add server option override that we reject -- should fail
+	discovery_req.ServerIPAddr = net.ParseIP("10.20.30.41").To4()
+	rai := dhcpv4.OptRelayAgentInfo(
+		dhcpv4.Option{Code: dhcpv4.ServerIdentifierOverrideSubOption, Value: dhcpv4.IP(net.ParseIP("10.20.30.41").To4())},
+	)
+	discovery_req.UpdateOption(rai)
+	result, stop := Handler4(discovery_req, discovery_resp)
+	assert.Nil(t, result)
+	assert.True(t, stop)
 }
 
 func TestRejectBadServerIDV6(t *testing.T) {
