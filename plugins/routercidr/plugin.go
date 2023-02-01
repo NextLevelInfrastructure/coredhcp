@@ -19,7 +19,8 @@
 //  server4:
 //     ...
 //     plugins:
-//     ...   # another plugin should assign an IP before routercidr runs
+//     ...   # another plugin should assign an IP before we run
+//     ...   # if you want to assign a default router/netmask, do it before we run
 //       - routercidr: "routers.yml" autorefresh
 //     ...
 //
