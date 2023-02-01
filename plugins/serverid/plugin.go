@@ -36,6 +36,11 @@
 // override must send client requests to only one DHCP server, because
 // the serverid no longer distinguishes between responding servers.
 
+// When at least one override is on the list to accept, the DHCPv4
+// serverid itself may be configured as the string "override_only".
+// This causes us to drop any DHCPv4 messages not received from
+// a relay agent providing an authorized override.
+
 package serverid
 
 import (
