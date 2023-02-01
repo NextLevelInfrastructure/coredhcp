@@ -2,9 +2,30 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 
-// This plugin reads a list of routers in CIDR notation. If yiaddr
-// in a DHCPv4 response is set and is inside one or more of the routers'
+// If you only ever assign one router and subnet mask, don't use
+// this: instead use plugins router and netmask.
+
+// This plugin reads a list of routers in IPv4 CIDR notation. If yiaddr
+// in the DHCPv4 response is set and is inside one or more of the routers'
 // networks, those routers are assigned in the response, as is the netmask.
+//  $ cat routers.yml
+//  routers:
+//   - 10.1.1.1/24
+//   - 10.2.2.1/24
+//   - 10.2.2.254/24
+//   - ...
+//
+//  $ cat config.yml
+//  server4:
+//     ...
+//     plugins:
+//     ...   # another plugin should assign an IP before routercidr runs
+//       - routercidr: "routers.yml" autorefresh
+//     ...
+//
+// If the file path is not absolute, it is relative to the cwd where coredhcp
+// is run. If the optional "autorefresh" argument is given, the plugin will try
+// to refresh the lease mappings at runtime whenever the lease file is updated.
 
 // It is an error for the input to contain two routers in overlapping
 // networks that do not have the same netmask. It is an error for any
@@ -15,7 +36,7 @@
 
 // We sequentially search all routers for every request, and at load time
 // our error checks are O(n^2) in the number of routers. If you use
-// more than a few hundred routers you'd want to change that to use
+// more than about a hundred routers you'd want to change this to use
 // something like netaddr.IPSet.
 
 package routercidr
@@ -94,6 +115,14 @@ func (state *PluginState) UpdateFrom(newrouters []netip.Prefix) error {
 	return nil
 }
 
+func (state *PluginState) LoadAndUpdate() error {
+	routers, err := LoadRouters(state.Filename)
+	if err != nil {
+		return err
+	}
+	return state.UpdateFrom(routers)
+}
+
 func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bool) {
 	if req.OpCode != dhcpv4.OpcodeBootRequest {
 		return resp, false
@@ -115,7 +144,7 @@ func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bo
 		}
 	}
 	if bits == 0 {
-		log.Warningf("no router found for %s", ip)
+		log.Warningf("no router for %s", ip)
 		return resp, false
 	}
 	resp.Options.Update(dhcpv4.OptRouter(routers...))
@@ -143,11 +172,7 @@ func (state *PluginState) FromArgs(args ...string) error {
 
 	// if the autorefresh argument is not present, just load the leases
 	if len(args) < 2 || args[1] != autoRefreshArg {
-		routers, err := LoadRouters(state.Filename)
-		if err != nil {
-			return err
-		}
-		return state.UpdateFrom(routers)
+		return state.LoadAndUpdate()
 	}
 	// otherwise watch the lease file and reload on any event
 	watcher, err := fsnotify.NewWatcher()
@@ -159,27 +184,17 @@ func (state *PluginState) FromArgs(args ...string) error {
 		return fmt.Errorf("failed to watch %s: %w", state.Filename, err)
 	}
 	// avoid race by doing initial load only after we start watching
-	routers, err := LoadRouters(state.Filename)
-	if err != nil {
-		watcher.Close()
-		return err
-	}
-	if err := state.UpdateFrom(routers); err != nil {
+	if err := state.LoadAndUpdate(); err != nil {
 		watcher.Close()
 		return err
 	}
 	state.watcher = watcher
 	go func() {
 		for range watcher.Events {
-			newones, err := LoadRouters(state.Filename)
-			if err != nil {
+			if err := state.LoadAndUpdate(); err != nil {
 				log.Warningf("failed to refresh from %s: %s", state.Filename, err)
-				continue
-			}
-			log.Infof("refreshed %s with %d routers", state.Filename, len(newones))
-			if err := state.UpdateFrom(newones); err != nil {
-				log.Warningf("failed to update during refresh of %s: %s", state.Filename, err)
-				continue
+			} else {
+				log.Infof("refreshed %s", state.Filename)
 			}
 		}
 		log.Warningf("file refresh watcher was closed: %s", state.Filename)
