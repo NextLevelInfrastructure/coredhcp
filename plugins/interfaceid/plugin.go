@@ -38,7 +38,7 @@
 // A lease file with errors will not be loaded.
 //
 //  $ cat interfaceid_leases.yml
-//  interfaceid:
+//  leases_by_interface:
 //    router1.us-ca-sfba.prod.example.com:Eth12/1(Port12):
 //      - [00:11:22:33:44:55, 10.0.0.1]
 //      - [01:23:45:67:89:01, fedb::a]
@@ -114,12 +114,12 @@ func LoadLeases(filename string) (LeaseMap, error) {
 		return nil, err
 	}
 	var enclosure struct {
-		Interfaceid LeaseMap
+		Leases_by_interface LeaseMap
 	}
 	if err = yaml.Unmarshal(yamlfile, &enclosure); err != nil {
 		return nil, err
 	}
-	return enclosure.Interfaceid, nil
+	return enclosure.Leases_by_interface, nil
 }
 
 // We pre-process the lease map to speed up certain operations and find errors.

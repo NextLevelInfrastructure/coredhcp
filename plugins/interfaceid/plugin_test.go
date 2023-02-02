@@ -24,7 +24,7 @@ func makeConfig(t *testing.T) (*os.File, func()) {
 
 	// fill temp file with valid lease lines and some comments
 	_, err = tmp.WriteString(`
-interfaceid:
+leases_by_interface:
   us-ca-sfba.prod.example.com:Eth12/1(Port12):
     - [00:11:22:33:44:55, 192.0.2.100]
     - [default, 192.0.2.101, fedb::2, fedb:ffff::/60]
