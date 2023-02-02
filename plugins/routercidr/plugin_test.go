@@ -23,7 +23,7 @@ func makeConfig(t *testing.T) (*os.File, func()) {
 
 	// fill temp file with valid lease lines and some comments
 	_, err = tmp.WriteString(`
-routers:
+router_interfaces:
   - 10.20.30.40/24
   - 1.2.3.0/24        # yes this is a legal router
   - 10.20.30.1/24
@@ -38,7 +38,7 @@ routers:
 }
 
 func newStateFromFile(t *testing.T, filename string) *PluginState {
-	routers, err := LoadRouters(filename)
+	routers, err := LoadRouterInterfaces(filename)
 	if !assert.NoError(t, err) {
 		return nil
 	}
@@ -49,11 +49,11 @@ func newStateFromFile(t *testing.T, filename string) *PluginState {
 }
 
 func TestLoadRecords(t *testing.T) {
-	t.Run("valid routers", func(t *testing.T) {
+	t.Run("valid router interfaces", func(t *testing.T) {
 		tmp, cleanup := makeConfig(t)
 		defer cleanup()
 
-		routers, err := LoadRouters(tmp.Name())
+		routers, err := LoadRouterInterfaces(tmp.Name())
 		if !assert.NoError(t, err) {
 			return
 		}
@@ -64,7 +64,7 @@ func TestLoadRecords(t *testing.T) {
 		}
 
 		state := newStateFromFile(t, tmp.Name())
-		assert.Equal(t, 3, len(state.Routers))
+		assert.Equal(t, 3, len(state.RouterInterfaces))
 	})
 
 	t.Run("overlap with different netmask", func(t *testing.T) {
@@ -73,7 +73,7 @@ func TestLoadRecords(t *testing.T) {
 
 		_, err := tmp.WriteString("  - 1.2.3.1/27\n")
 		require.NoError(t, err)
-		routers, err := LoadRouters(tmp.Name())
+		routers, err := LoadRouterInterfaces(tmp.Name())
 		assert.Nil(t, err)
 		var state PluginState
 		state.Filename = tmp.Name()
@@ -87,7 +87,7 @@ func TestLoadRecords(t *testing.T) {
 
 		_, err := tmp.WriteString("  - 2.3.4.5/0\n")
 		require.NoError(t, err)
-		routers, err := LoadRouters(tmp.Name())
+		routers, err := LoadRouterInterfaces(tmp.Name())
 		assert.Nil(t, err)
 		var state PluginState
 		state.Filename = tmp.Name()
@@ -101,7 +101,7 @@ func TestLoadRecords(t *testing.T) {
 
 		_, err := tmp.WriteString("  - ffdb:face::/60\n")
 		require.NoError(t, err)
-		routers, err := LoadRouters(tmp.Name())
+		routers, err := LoadRouterInterfaces(tmp.Name())
 		assert.Nil(t, err)
 		var state PluginState
 		state.Filename = tmp.Name()
@@ -162,10 +162,10 @@ func TestHandler4(t *testing.T) {
 		err := state.FromArgs(tmp.Name(), autoRefreshArg)
 		require.NoError(t, err)
 
-		assert.Equal(t, 3, len(state.Routers))
+		assert.Equal(t, 3, len(state.RouterInterfaces))
 
-		// we add more routers to the file
-		// this should trigger an event to refresh the routers file
+		// we add more router interfaces to the file
+		// this should trigger an event to refresh the router interfaces file
 		_, err = tmp.WriteString("  - 192.168.1.1/16\n")
 		require.NoError(t, err)
 		// since the event is processed asynchronously, give it a little time
@@ -175,7 +175,7 @@ func TestHandler4(t *testing.T) {
 		state.Lock()
 		defer state.Unlock()
 
-		assert.Equal(t, 4, len(state.Routers))
+		assert.Equal(t, 4, len(state.RouterInterfaces))
 		state.watcher.Close()
 	})
 }

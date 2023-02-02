@@ -5,11 +5,12 @@
 // If you only ever assign one router and subnet mask, don't use
 // this: instead use plugins router and netmask.
 
-// This plugin reads a list of routers in IPv4 CIDR notation. If yiaddr
-// in the DHCPv4 response is set and is inside one or more of the routers'
-// networks, those routers are assigned in the response, as is the netmask.
-//  $ cat routers.yml
-//  routers:
+// This plugin reads a list of router interfaces in IPv4 CIDR notation. If
+// yiaddr in the DHCPv4 response is set and is inside one or more of the
+// interfaces' networks, those interfaces are assigned in the response, as
+// is the netmask.
+//  $ cat router_interfaces.yml
+//  router_interfaces:
 //   - 10.1.1.1/24
 //   - 10.2.2.1/24
 //   - 10.2.2.254/24
@@ -21,23 +22,23 @@
 //     plugins:
 //     ...   # another plugin should assign an IP before we run
 //     ...   # if you want to assign a default router/netmask, do it before we run
-//       - routercidr: "routers.yml" autorefresh
+//       - routercidr: "router_interfaces.yml" autorefresh
 //     ...
 //
 // If the file path is not absolute, it is relative to the cwd where coredhcp
 // is run. If the optional "autorefresh" argument is given, the plugin will try
 // to refresh the lease mappings at runtime whenever the lease file is updated.
 
-// It is an error for the input to contain two routers in overlapping
+// It is an error for the input to contain two interfaces in overlapping
 // networks that do not have the same netmask. It is an error for any
-// router to have a 0 netmask. It is an error for any router to have
+// interface to have a 0 netmask. It is an error for any interface to have
 // an IPv6 address, since this plugin is for DHCPv4 only. DHCPv6 clients
 // get their routers and netmask from Router Advertisements (RAs),
 // not from DHCP.
 
-// We sequentially search all routers for every request, and at load time
-// our error checks are O(n^2) in the number of routers. If you use
-// more than about a hundred routers you'd want to change this to use
+// We sequentially search all interfaces for every request, and at load time
+// our error checks are O(n^2) in the number of interfaces. If you use
+// more than about a hundred interfaces you'd want to change this to use
 // something like netaddr.IPSet.
 
 package routercidr
@@ -72,21 +73,21 @@ type PluginState struct {
 	sync.Mutex
 	Filename string
 	watcher  *fsnotify.Watcher  // close this to make reload goroutine exit
-        Routers  []netip.Prefix
+        RouterInterfaces []netip.Prefix
 }
 
-func LoadRouters(filename string) ([]netip.Prefix, error) {
+func LoadRouterInterfaces(filename string) ([]netip.Prefix, error) {
 	yamlfile, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return nil, err
 	}
 	var enclosure struct {
-		Routers []netip.Prefix
+		Router_interfaces []netip.Prefix
 	}
 	if err = yaml.Unmarshal(yamlfile, &enclosure); err != nil {
 		return nil, err
 	}
-	return enclosure.Routers, nil
+	return enclosure.Router_interfaces, nil
 }
 
 // At some point we might want to use a different data structure so we
@@ -111,13 +112,13 @@ func (state *PluginState) UpdateFrom(newrouters []netip.Prefix) error {
 		}
 	}
 	state.Lock()
-	state.Routers = newrouters
+	state.RouterInterfaces = newrouters
 	state.Unlock()
 	return nil
 }
 
 func (state *PluginState) LoadAndUpdate() error {
-	routers, err := LoadRouters(state.Filename)
+	routers, err := LoadRouterInterfaces(state.Filename)
 	if err != nil {
 		return err
 	}
@@ -138,7 +139,7 @@ func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bo
 	defer state.Unlock()
 	bits := 0
 	var routers []net.IP
-	for _, router := range state.Routers {
+	for _, router := range state.RouterInterfaces {
 		if router.Contains(ip) {
 			bits = router.Bits()
 			routers = append(routers, net.IP(router.Addr().AsSlice()))
