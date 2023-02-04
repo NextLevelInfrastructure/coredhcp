@@ -96,6 +96,9 @@ func LoadRouterInterfaces(filename string) ([]netip.Prefix, error) {
 // structure will occur here.
 
 func (state *PluginState) UpdateFrom(newrouters []netip.Prefix) error {
+	if len(newrouters) == 0 {
+		return fmt.Errorf("no router_interface in config file")
+	}
 	for _, prefix := range newrouters {
 		if !prefix.Addr().Is4() {
 			return fmt.Errorf("router interface %s is IPv6 but DHCPv6 clients get routers from Router Advertisements, not DHCP", prefix)
