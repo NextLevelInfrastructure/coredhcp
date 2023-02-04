@@ -283,7 +283,7 @@ func defaultListen(ver protocolVersion) ([]net.UDPAddr, error) {
 	case protocolV6:
 		l, err := expandLLMulticast(&net.UDPAddr{IP: dhcpv6.AllDHCPRelayAgentsAndServers, Port: dhcpv6.DefaultServerPort})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("expandLLMulticast: %v", err)
 		}
 		l = append(l,
 			net.UDPAddr{IP: dhcpv6.AllDHCPServers, Port: dhcpv6.DefaultServerPort},
