@@ -133,7 +133,7 @@ func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bo
 		return resp, false
 	}
 	if len(resp.YourIPAddr) == 0 || resp.YourIPAddr.IsUnspecified() {
-		log.Infof("not assigning router/subnet because yiaddr is not set")
+		log.Debugf("not assigning router/subnet because yiaddr is not set: %s", resp)
 		return resp, false
 	}
 	ip, _ := netip.AddrFromSlice(resp.YourIPAddr)
@@ -154,7 +154,7 @@ func (state *PluginState) Handler4(req, resp *dhcpv4.DHCPv4) (*dhcpv4.DHCPv4, bo
 	}
 	resp.Options.Update(dhcpv4.OptRouter(routers...))
 	resp.Options.Update(dhcpv4.OptSubnetMask(net.CIDRMask(bits, 32)))
-	log.Infof("assigned routers %s netmask /%d for %s", routers, bits, ip)
+	log.Infof("routers %s netmask /%d for %s", routers, bits, ip)
 	return resp, false
 }
 

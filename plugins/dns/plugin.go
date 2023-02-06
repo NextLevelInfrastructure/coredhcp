@@ -40,7 +40,7 @@ func setup6(args ...string) (handler.Handler6, error) {
 		}
 		dnsServers6 = append(dnsServers6, server)
 	}
-	log.Infof("loaded %d DNS servers.", len(dnsServers6))
+	log.Infof("loaded %d DNS servers: %s", len(dnsServers6), dnsServers6)
 	return Handler6, nil
 }
 
@@ -56,7 +56,7 @@ func setup4(args ...string) (handler.Handler4, error) {
 		}
 		dnsServers4 = append(dnsServers4, DNSServer)
 	}
-	log.Infof("loaded %d DNS servers.", len(dnsServers4))
+	log.Infof("loaded %d DNS servers: %s", len(dnsServers4), dnsServers4)
 	return Handler4, nil
 }
 

@@ -163,17 +163,20 @@ func parseIP4(arg string) (net.IP, error) {
 }
 
 func setup4(args ...string) (handler.Handler4, error) {
-	log.Printf("loading `server_id` plugin for DHCPv4 with args: %v", args)
+	log.Printf("loading `server_id` plugin for DHCPv4")
 	if len(args) < 1 {
-		return nil, errors.New("need an argument")
+		return nil, errors.New("DHCPv4 server_id plugin needs an argument")
 	}
 	var err error
 	if args[0] == "override_only" {
 		v4ServerID = nil
-		log.Infof("rejecting all requests except for authorized relays")
-	} else if v4ServerID, err = parseIP4(args[0]); err != nil {
-		log.Errorf("error parsing serverid %s: %v", args[0], err)
-		return nil, err
+		log.Infof("DHCPv4 rejecting all requests except for authorized relays")
+	} else {
+		if v4ServerID, err = parseIP4(args[0]); err != nil {
+			log.Errorf("error parsing serverid %s: %v", args[0], err)
+			return nil, err
+		}
+		log.Infof("DHCPv4 server_id %s", v4ServerID)
 	}
 	v4Overrides = nil
 	for _, arg := range args[1:] {
@@ -194,7 +197,7 @@ func setup4(args ...string) (handler.Handler4, error) {
 }
 
 func setup6(args ...string) (handler.Handler6, error) {
-	log.Printf("loading `server_id` plugin for DHCPv6 with args: %v", args)
+	log.Printf("loading `server_id` plugin for DHCPv6: %v", args)
 	if len(args) < 2 {
 		return nil, errors.New("need a DUID type and value")
 	}
