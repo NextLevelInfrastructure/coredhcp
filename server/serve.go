@@ -89,7 +89,7 @@ func listen6(a *net.UDPAddr) (*listener6, error) {
 	if a.Zone != "" {
 		ifi, err = net.InterfaceByName(a.Zone)
 		if err != nil {
-			return nil, fmt.Errorf("DHCPv4: Listen could not find interface %s: %v", a.Zone, err)
+			return nil, fmt.Errorf("DHCPv6: Listen could not find interface %s: %v", a.Zone, err)
 		}
 		l6.Interface = *ifi
 	} else {
